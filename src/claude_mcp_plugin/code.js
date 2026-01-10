@@ -189,6 +189,19 @@ async function handleCommand(command, params) {
       return await createVector(params);
     case "create_line":
       return await createLine(params);
+    case "rename_node":
+      if (!params || !params.nodeId) {
+        throw new Error("Missing nodeId parameter");
+      }
+      if (!params.newName) {
+        throw new Error("Missing newName parameter");
+      }
+      return await renameNode(params);
+    case "rename_nodes":
+      if (!params || !params.nodes || !Array.isArray(params.nodes)) {
+        throw new Error("Missing nodes array parameter");
+      }
+      return await renameNodes(params);
     default:
       throw new Error(`Unknown command: ${command}`);
   }
@@ -708,6 +721,54 @@ async function deleteNode(params) {
   node.remove();
 
   return nodeInfo;
+}
+
+async function renameNode(params) {
+  const { nodeId, newName } = params;
+  const node = await figma.getNodeByIdAsync(nodeId);
+  if (!node) {
+    throw new Error(`Node not found with ID: ${nodeId}`);
+  }
+  const oldName = node.name;
+  node.name = newName;
+  return {
+    id: node.id,
+    oldName,
+    newName: node.name,
+  };
+}
+
+async function renameNodes(params) {
+  const { nodes } = params;
+  const results = [];
+  let successCount = 0;
+  let failureCount = 0;
+
+  for (const { nodeId, newName } of nodes) {
+    try {
+      const node = await figma.getNodeByIdAsync(nodeId);
+      if (!node) {
+        results.push({ nodeId, success: false, error: `Node not found: ${nodeId}` });
+        failureCount++;
+        continue;
+      }
+      const oldName = node.name;
+      node.name = newName;
+      results.push({ nodeId, oldName, newName, success: true });
+      successCount++;
+    } catch (error) {
+      results.push({ nodeId, success: false, error: error.message });
+      failureCount++;
+    }
+  }
+
+  return {
+    success: successCount > 0,
+    renamedCount: successCount,
+    failedCount: failureCount,
+    totalRequested: nodes.length,
+    results,
+  };
 }
 
 async function getStyles() {

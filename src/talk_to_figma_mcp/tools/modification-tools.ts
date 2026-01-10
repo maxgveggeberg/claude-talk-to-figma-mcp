@@ -405,4 +405,108 @@ export function registerModificationTools(server: McpServer): void {
       }
     }
   );
+
+  // Rename Node Tool
+  server.tool(
+    "rename_node",
+    "Rename a node in Figma",
+    {
+      nodeId: z.string().describe("The ID of the node to rename"),
+      newName: z.string().describe("The new name for the node"),
+    },
+    async ({ nodeId, newName }) => {
+      try {
+        const result = await sendCommandToFigma("rename_node", {
+          nodeId,
+          newName,
+        });
+        const typedResult = result as { id: string; oldName: string; newName: string };
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Renamed node from "${typedResult.oldName}" to "${typedResult.newName}" (ID: ${typedResult.id})`,
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error renaming node: ${error instanceof Error ? error.message : String(error)}`,
+            },
+          ],
+        };
+      }
+    }
+  );
+
+  // Rename Multiple Nodes Tool
+  server.tool(
+    "rename_nodes",
+    "Rename multiple nodes in Figma in a single operation",
+    {
+      nodes: z.array(
+        z.object({
+          nodeId: z.string().describe("The ID of the node to rename"),
+          newName: z.string().describe("The new name for the node"),
+        })
+      ).describe("Array of nodes to rename with their new names"),
+    },
+    async ({ nodes }) => {
+      try {
+        const result = await sendCommandToFigma("rename_nodes", { nodes });
+        const typedResult = result as {
+          success: boolean;
+          renamedCount: number;
+          failedCount: number;
+          totalRequested: number;
+          results: Array<{
+            nodeId: string;
+            oldName?: string;
+            newName?: string;
+            success: boolean;
+            error?: string;
+          }>;
+        };
+
+        const successResults = typedResult.results
+          .filter((r) => r.success)
+          .map((r) => `  "${r.oldName}" → "${r.newName}"`)
+          .join("\n");
+
+        const failedResults = typedResult.results
+          .filter((r) => !r.success)
+          .map((r) => `  ${r.nodeId}: ${r.error}`)
+          .join("\n");
+
+        let message = `Renamed ${typedResult.renamedCount}/${typedResult.totalRequested} nodes`;
+        if (successResults) {
+          message += `\n\nSuccessful renames:\n${successResults}`;
+        }
+        if (failedResults) {
+          message += `\n\nFailed renames:\n${failedResults}`;
+        }
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: message,
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error renaming nodes: ${error instanceof Error ? error.message : String(error)}`,
+            },
+          ],
+        };
+      }
+    }
+  );
 }
