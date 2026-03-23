@@ -86,4 +86,6 @@ export type FigmaCommand =
   | "flatten_node"
   | "insert_child"
   | "rename_node"
-  | "rename_nodes";
+  | "rename_nodes"
+  | "get_node_tree"
+  | "find_and_replace_text";

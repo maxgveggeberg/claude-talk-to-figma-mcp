@@ -289,6 +289,10 @@ async function handleCommand(command, params) {
       return await setTextTruncation(params);
     case "set_max_lines":
       return await setMaxLines(params);
+    case "get_node_tree":
+      return await getNodeTree(params);
+    case "find_and_replace_text":
+      return await findAndReplaceText(params);
     default:
       throw new Error(`Unknown command: ${command}`);
   }
@@ -4649,5 +4653,169 @@ async function setMaxLines(params) {
     name: node.name,
     id: node.id,
     maxLines: node.maxLines,
+  };
+}
+
+// --- New commands (Fixes #5, #6, #9) ---
+
+/**
+ * Get a lightweight tree structure of a node (Fix #5).
+ * Returns only id, name, type, and children — no styling or coordinates.
+ */
+async function getNodeTree(params) {
+  const { nodeId, maxDepth = 5, commandId = generateCommandId() } = params || {};
+  const node = await figma.getNodeByIdAsync(nodeId);
+  if (!node) {
+    throw new Error(`Node with ID ${nodeId} not found`);
+  }
+
+  function buildTree(node, depth) {
+    const entry = {
+      id: node.id,
+      name: node.name,
+      type: node.type,
+    };
+
+    if (depth >= maxDepth || !("children" in node)) {
+      entry.children = [];
+      if ("children" in node && node.children.length > 0) {
+        entry.childCount = node.children.length;
+        entry.truncated = true;
+      }
+      return entry;
+    }
+
+    entry.children = node.children
+      .filter(child => child.visible !== false)
+      .map(child => buildTree(child, depth + 1));
+
+    return entry;
+  }
+
+  return buildTree(node, 0);
+}
+
+/**
+ * Find and replace text across all text nodes within a frame (Fix #9).
+ * Scans all text nodes, matches against a search string, and replaces.
+ */
+async function findAndReplaceText(params) {
+  const { nodeId, find, replace, useRegex = false, commandId = generateCommandId() } = params || {};
+
+  if (!nodeId || !find) {
+    throw new Error("Missing required parameters: nodeId, find");
+  }
+
+  const node = await figma.getNodeByIdAsync(nodeId);
+  if (!node) {
+    throw new Error(`Node with ID ${nodeId} not found`);
+  }
+
+  // Collect all text nodes
+  const textNodes = [];
+  async function collectTextNodes(n) {
+    if (n.visible === false) return;
+    if (n.type === "TEXT") {
+      textNodes.push(n);
+    }
+    if ("children" in n) {
+      for (const child of n.children) {
+        await collectTextNodes(child);
+      }
+    }
+  }
+  await collectTextNodes(node);
+
+  sendProgressUpdate(commandId, 'find_and_replace_text', 'in_progress', 10, textNodes.length, 0,
+    `Found ${textNodes.length} text nodes to search.`);
+
+  // Build regex or exact matcher
+  let regex;
+  if (useRegex) {
+    try {
+      regex = new RegExp(find, 'g');
+    } catch (e) {
+      throw new Error(`Invalid regex pattern: ${e.message}`);
+    }
+  } else {
+    // Escape special regex chars for exact match
+    const escaped = find.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    regex = new RegExp(escaped, 'g');
+  }
+
+  // Find matching nodes
+  const matchingNodes = textNodes.filter(n => regex.test(n.characters));
+  // Reset lastIndex after test calls
+  regex.lastIndex = 0;
+
+  sendProgressUpdate(commandId, 'find_and_replace_text', 'in_progress', 20, matchingNodes.length, 0,
+    `Found ${matchingNodes.length} nodes with matching text.`);
+
+  const results = [];
+  let applied = 0;
+  let failed = 0;
+
+  // Process in batches of 5
+  const batchSize = 5;
+  for (let i = 0; i < matchingNodes.length; i += batchSize) {
+    const batch = matchingNodes.slice(i, i + batchSize);
+
+    for (const textNode of batch) {
+      try {
+        // Load the font before modifying
+        const fontName = textNode.fontName;
+        if (fontName && fontName !== figma.mixed) {
+          await figma.loadFontAsync(fontName);
+        } else if (fontName === figma.mixed) {
+          // Load all fonts used in the node
+          const segments = textNode.getStyledTextSegments(['fontName']);
+          for (const seg of segments) {
+            await figma.loadFontAsync(seg.fontName);
+          }
+        }
+
+        const originalText = textNode.characters;
+        regex.lastIndex = 0;
+        const newText = originalText.replace(regex, replace);
+        textNode.characters = newText;
+
+        results.push({
+          nodeId: textNode.id,
+          success: true,
+          originalText,
+          newText,
+        });
+        applied++;
+      } catch (error) {
+        results.push({
+          nodeId: textNode.id,
+          success: false,
+          error: error.message,
+        });
+        failed++;
+      }
+    }
+
+    const progress = Math.round(20 + ((i + batch.length) / matchingNodes.length) * 80);
+    sendProgressUpdate(commandId, 'find_and_replace_text', 'in_progress', progress,
+      matchingNodes.length, i + batch.length,
+      `Replaced ${applied} of ${matchingNodes.length} nodes.`);
+
+    // Brief delay between batches
+    if (i + batchSize < matchingNodes.length) {
+      await delay(50);
+    }
+  }
+
+  sendProgressUpdate(commandId, 'find_and_replace_text', 'completed', 100,
+    matchingNodes.length, matchingNodes.length,
+    `Done. ${applied} replaced, ${failed} failed.`);
+
+  return {
+    success: applied > 0,
+    matchesFound: matchingNodes.length,
+    replacementsApplied: applied,
+    replacementsFailed: failed,
+    results,
   };
 }

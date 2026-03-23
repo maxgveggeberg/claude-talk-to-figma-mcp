@@ -117,6 +117,20 @@ const server = Bun.serve({
       });
     }
 
+    // Handle channels endpoint (Fix #10: discover active channels)
+    if (url.pathname === "/channels") {
+      const channelList = Array.from(channels.entries()).map(([name, clients]) => ({
+        name,
+        clients: clients.size
+      }));
+      return new Response(JSON.stringify(channelList), {
+        headers: {
+          "Content-Type": "application/json",
+          "Access-Control-Allow-Origin": "*"
+        }
+      });
+    }
+
     // Handle WebSocket upgrade
     try {
       const success = server.upgrade(req, {

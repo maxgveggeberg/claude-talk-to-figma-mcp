@@ -446,6 +446,58 @@ export function registerTextTools(server: McpServer): void {
     }
   );
 
+  // Find and Replace Text Tool (Fix #9: batch text modification)
+  server.tool(
+    "find_and_replace_text",
+    "Find and replace text across all text nodes within a frame. Scans all text nodes, matches against a search string (exact or regex), and replaces matching text.",
+    {
+      nodeId: z.string().describe("Root node to search within"),
+      find: z.string().describe("Text to find (exact match, or regex pattern if useRegex is true)"),
+      replace: z.string().describe("Replacement text"),
+      useRegex: z.boolean().optional().describe("If true, treat 'find' as a regex pattern (default: false)"),
+    },
+    async ({ nodeId, find, replace, useRegex }) => {
+      try {
+        const result = await sendCommandToFigma("find_and_replace_text", {
+          nodeId,
+          find,
+          replace,
+          useRegex: useRegex || false,
+        }, 120000);
+
+        const typedResult = result as {
+          success: boolean;
+          matchesFound: number;
+          replacementsApplied: number;
+          replacementsFailed: number;
+          results?: Array<{ nodeId: string; success: boolean; originalText?: string; newText?: string; error?: string }>;
+        };
+
+        let responseText = `Find and replace completed:\n- Matches found: ${typedResult.matchesFound}\n- Replacements applied: ${typedResult.replacementsApplied}\n- Failures: ${typedResult.replacementsFailed}`;
+
+        if (typedResult.results) {
+          const failures = typedResult.results.filter(r => !r.success);
+          if (failures.length > 0) {
+            responseText += `\n\nFailed nodes:\n${failures.map(f => `- ${f.nodeId}: ${f.error || "Unknown error"}`).join("\n")}`;
+          }
+        }
+
+        return {
+          content: [{ type: "text", text: responseText }],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error in find and replace: ${error instanceof Error ? error.message : String(error)}`,
+            },
+          ],
+        };
+      }
+    }
+  );
+
   // Get Styled Text Segments Tool
   server.tool(
     "get_styled_text_segments",
